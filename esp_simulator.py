@@ -1,7 +1,7 @@
 import requests
 import time
 
-BASE_URL = "http://192.168.1.3:8000/api"
+BASE_URL = "http://10.149.11.200:8000/api"
 BIN_ID = "BIN-001"
 
 print("=======================================")

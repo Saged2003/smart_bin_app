@@ -10,6 +10,8 @@ class Profile(models.Model):
     address = models.CharField(max_length=200, null=True, blank=True)
     deposits = models.IntegerField(default=0)
     is_employee = models.BooleanField(default=False)
+    is_approved_employee = models.BooleanField(default=False)
+    profile_picture = models.ImageField(upload_to='profiles/', null=True, blank=True)
 
     def __str__(self):
         return self.user.username
@@ -30,6 +32,7 @@ class Bin(models.Model):
     lat = models.FloatField(null=True, blank=True)
     lng = models.FloatField(null=True, blank=True)
     status = models.CharField(max_length=50, default='idle')
+    capacity = models.FloatField(default=0.0)
     current_user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
 
     def __str__(self):
@@ -45,6 +48,9 @@ class Reward(models.Model):
     name = models.CharField(max_length=100)
     description = models.CharField(max_length=100)
     cost = models.IntegerField()
+    required_points = models.IntegerField(default=0)
+    discount_percentage = models.FloatField(null=True, blank=True)
+    is_premium = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
 
     def __str__(self):

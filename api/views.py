@@ -1,12 +1,16 @@
 import uuid
-from rest_framework.decorators import api_view, permission_classes
+from django.core.mail import send_mail
+from rest_framework.decorators import api_view, permission_classes, parser_classes
+from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
 from rest_framework.authtoken.models import Token
 from .models import Profile, Bin, Activity, Compound, Reward
-from .serializers import CompoundSerializer, ActivitySerializer, RewardSerializer, BinSerializer
+from .serializers import CompoundSerializer, ActivitySerializer, RewardSerializer, BinSerializer, ProfileSerializer
+
+SYSTEM_AUTHOR = "SAGED RYAN"
 
 @api_view(['POST'])
 def register_user(request):
@@ -19,15 +23,28 @@ def register_user(request):
         return Response({'error': 'exists'}, status=400)
 
     user = User.objects.create_user(username=username, password=password, email=email)
-    Profile.objects.create(user=user, points=0, weight=0.0, deposits=0, is_employee=is_employee)
+    Profile.objects.create(user=user, points=0, weight=0.0, deposits=0, is_employee=is_employee, is_approved_employee=False)
     token, created = Token.objects.get_or_create(user=user)
+
+    if is_employee:
+        try:
+            send_mail(
+                'New Employee Registration Request',
+                f'User {username} ({email}) requested to join as an employee. Please approve or reject from the system.',
+                'sagedryan775@gmail.com',
+                ['sagedryan775@gmail.com'],
+                fail_silently=True,
+            )
+        except Exception:
+            pass
 
     return Response({
         'message': 'ok',
         'token': token.key,
         'points': 0,
         'username': username,
-        'is_employee': is_employee
+        'is_employee': is_employee,
+        'is_approved_employee': False
     })
 
 @api_view(['POST'])
@@ -44,7 +61,8 @@ def login_user(request):
             'token': token.key,
             'points': profile.points,
             'username': username,
-            'is_employee': profile.is_employee
+            'is_employee': profile.is_employee,
+            'is_approved_employee': profile.is_approved_employee
         })
     return Response({'error': 'wrong'}, status=400)
 
@@ -62,12 +80,15 @@ def get_profile(request):
             'email': user.email or '',
             'phone': profile.phone or '',
             'address': profile.address or '',
-            'is_employee': profile.is_employee
+            'is_employee': profile.is_employee,
+            'is_approved_employee': profile.is_approved_employee,
+            'profile_picture': profile.profile_picture.url if profile.profile_picture else None
         })
     except Exception:
         return Response({'error': 'not found'}, status=404)
 
 @api_view(['PUT'])
+@parser_classes([MultiPartParser, FormParser])
 def update_profile(request):
     user = request.user if request.user.is_authenticated else None
     if not user:
@@ -87,9 +108,40 @@ def update_profile(request):
         profile.full_name = request.data.get('full_name', profile.full_name)
         profile.phone = request.data.get('phone', profile.phone)
         profile.address = request.data.get('address', profile.address)
+
+        if 'profile_picture' in request.FILES:
+            profile.profile_picture = request.FILES['profile_picture']
+
         profile.save()
 
-        return Response({'message': 'updated'})
+        return Response({
+            'message': 'updated',
+            'profile_picture': profile.profile_picture.url if profile.profile_picture else None
+        })
+    except Exception as error:
+        return Response({'error': str(error)}, status=400)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def approve_employee(request):
+    if request.user.email != 'sagedryan775@gmail.com':
+        return Response({'error': 'unauthorized'}, status=403)
+
+    target_username = request.data.get('username')
+    action = request.data.get('action')
+
+    try:
+        target_user = User.objects.get(username=target_username)
+        profile = Profile.objects.get(user=target_user)
+
+        if action == 'approve':
+            profile.is_approved_employee = True
+            profile.save()
+            return Response({'message': 'approved'})
+        elif action == 'reject':
+            target_user.delete()
+            return Response({'message': 'rejected'})
+
     except Exception as error:
         return Response({'error': str(error)}, status=400)
 
@@ -117,7 +169,7 @@ def user_scan_qr(request):
     try:
         bin_obj = Bin.objects.get(current_qr_code=code)
         if bin_obj.status != 'idle':
-            return Response({'error': 'bin is busy'}, status=400)
+            return Response({'error': 'invalid code'}, status=400)
 
         bin_obj.current_user = user
         bin_obj.status = 'scanned'
@@ -171,7 +223,7 @@ def esp_end_session(request):
 @permission_classes([IsAuthenticated])
 def employee_update_location(request):
     profile = Profile.objects.get(user=request.user)
-    if not profile.is_employee:
+    if not profile.is_employee or not profile.is_approved_employee:
         return Response({'error': 'unauthorized'}, status=403)
 
     bin_id = request.data.get('bin_id')
@@ -206,6 +258,76 @@ def get_activities(request):
 
 @api_view(['GET'])
 def get_rewards(request):
+    username = request.query_params.get('username')
+    user_points = 0
+    if username:
+        try:
+            u = User.objects.get(username=username)
+            p = Profile.objects.get(user=u)
+            user_points = p.points
+        except Exception:
+            pass
+
     rewards = Reward.objects.all()
-    serializer = RewardSerializer(rewards, many=True)
-    return Response(serializer.data)
+    data = []
+    for r in rewards:
+        r_data = RewardSerializer(r).data
+        if user_points >= r.required_points:
+            r_data['status'] = 'redeem'
+        else:
+            r_data['status'] = 'locked'
+        data.append(r_data)
+
+    milestone_step = 1000
+    current_level = user_points // milestone_step
+    next_milestone = (current_level + 1) * milestone_step
+    points_left = next_milestone - user_points
+
+    return Response({
+        'rewards': data,
+        'user_points': user_points,
+        'next_milestone': next_milestone,
+        'points_left': points_left
+    })
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def redeem_reward(request):
+    reward_id = request.data.get('reward_id')
+    original_price = request.data.get('original_price')
+    user = request.user
+    
+    try:
+        profile = Profile.objects.get(user=user)
+        reward = Reward.objects.get(id=reward_id)
+
+        if profile.points < reward.required_points:
+            return Response({'error': 'not enough points to unlock'}, status=400)
+
+        if profile.points < reward.cost:
+            return Response({'error': 'not enough points to redeem'}, status=400)
+
+        profile.points -= reward.cost
+        profile.save()
+
+        response_data = {
+            'message': 'redeemed successfully',
+            'new_points': profile.points
+        }
+
+        if reward.discount_percentage is not None and original_price is not None:
+            price = float(original_price)
+            discount_amount = price * (reward.discount_percentage / 100.0)
+            final_price = price - discount_amount
+            
+            response_data['discount_percentage'] = reward.discount_percentage
+            response_data['original_price'] = price
+            response_data['discount_amount'] = discount_amount
+            response_data['final_price'] = final_price
+
+        return Response(response_data)
+
+    except Reward.DoesNotExist:
+        return Response({'error': 'invalid reward'}, status=404)
+    except Exception as error:
+        return Response({'error': str(error)}, status=400)

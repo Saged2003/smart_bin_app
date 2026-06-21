@@ -8,6 +8,8 @@ urlpatterns = [
     path('update-profile/', views.update_profile),
     path('activities/', views.get_activities),
     path('rewards/', views.get_rewards),
+    path('redeem-reward/', views.redeem_reward),
+    path('approve-employee/', views.approve_employee),
     path('esp/get-code/', views.esp_get_code),
     path('esp/check-scan/', views.esp_check_scan),
     path('esp/end-session/', views.esp_end_session),
