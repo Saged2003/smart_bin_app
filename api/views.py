@@ -1,16 +1,30 @@
 import uuid
+import math
 from django.core.mail import send_mail
 from rest_framework.decorators import api_view, permission_classes, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework import status  
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
 from rest_framework.authtoken.models import Token
-from .models import Profile, Bin, Activity, Compound, Reward
+from django_ratelimit.decorators import ratelimit
+from .models import Profile, Bin, Activity, Compound, Reward, RedeemedReward
 from .serializers import CompoundSerializer, ActivitySerializer, RewardSerializer, BinSerializer, ProfileSerializer
 
-SYSTEM_AUTHOR = "SAGED RYAN"
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    return R * c
+
+def verify_hardware_token(bin_obj, provided_token):
+    if bin_obj.hardware_token and bin_obj.hardware_token != provided_token:
+        return False
+    return True
 
 @api_view(['POST'])
 def register_user(request):
@@ -23,7 +37,7 @@ def register_user(request):
         return Response({'error': 'exists'}, status=400)
 
     user = User.objects.create_user(username=username, password=password, email=email)
-    Profile.objects.create(user=user, points=0, weight=0.0, deposits=0, is_employee=is_employee, is_approved_employee=False)
+    Profile.objects.create(user=user, points=0, milestone_points=0, weight=0.0, co2_saved=0.0, deposits=0, is_employee=is_employee, is_approved_employee=False)
     token, created = Token.objects.get_or_create(user=user)
 
     if is_employee:
@@ -31,8 +45,8 @@ def register_user(request):
             send_mail(
                 'New Employee Registration Request',
                 f'User {username} ({email}) requested to join as an employee. Please approve or reject from the system.',
-                'sagedryan775@gmail.com',
-                ['sagedryan775@gmail.com'],
+                'admin@smartbin.local',
+                ['sagedryan775@gmail.com'],  
                 fail_silently=True,
             )
         except Exception:
@@ -47,6 +61,7 @@ def register_user(request):
         'is_approved_employee': False
     })
 
+@ratelimit(key='ip', rate='5/m', block=True)
 @api_view(['POST'])
 def login_user(request):
     username = request.data.get('username')
@@ -55,7 +70,17 @@ def login_user(request):
 
     if user is not None:
         token, created = Token.objects.get_or_create(user=user)
-        profile = Profile.objects.get(user=user)
+        
+        profile, created_profile = Profile.objects.get_or_create(user=user)
+        
+        if created_profile:
+            profile.points = 0
+            profile.milestone_points = 0
+            profile.weight = 0.0
+            profile.co2_saved = 0.0
+            profile.deposits = 0
+            profile.save()
+            
         return Response({
             'message': 'ok',
             'token': token.key,
@@ -71,10 +96,15 @@ def get_profile(request):
     username = request.query_params.get('username')
     try:
         user = User.objects.get(username=username)
-        profile = Profile.objects.get(user=user)
+        # التعديل هنا للحماية
+        profile, created = Profile.objects.get_or_create(user=user)
+        
         return Response({
             'points': profile.points,
+            'milestone_points': profile.milestone_points,
+            'premium_unlocked': profile.premium_unlocked,
             'weight': profile.weight,
+            'co2_saved': round(profile.co2_saved, 2),
             'deposits': profile.deposits,
             'full_name': profile.full_name or '',
             'email': user.email or '',
@@ -99,7 +129,8 @@ def update_profile(request):
             return Response({'error': 'unauthorized'}, status=401)
 
     try:
-        profile = Profile.objects.get(user=user)
+        # التعديل هنا للحماية
+        profile, created = Profile.objects.get_or_create(user=user)
 
         if 'email' in request.data:
             user.email = request.data.get('email')
@@ -124,7 +155,7 @@ def update_profile(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def approve_employee(request):
-    if request.user.email != 'sagedryan775@gmail.com':
+    if request.user.email != 'sagedryan775@gmail.com' and not request.user.is_superuser:
         return Response({'error': 'unauthorized'}, status=403)
 
     target_username = request.data.get('username')
@@ -132,7 +163,8 @@ def approve_employee(request):
 
     try:
         target_user = User.objects.get(username=target_username)
-        profile = Profile.objects.get(user=target_user)
+        # التعديل هنا للحماية
+        profile, created = Profile.objects.get_or_create(user=target_user)
 
         if action == 'approve':
             profile.is_approved_employee = True
@@ -148,8 +180,12 @@ def approve_employee(request):
 @api_view(['POST'])
 def esp_get_code(request):
     bin_id = request.data.get('bin_id')
+    hardware_token = request.data.get('hardware_token')
+    
     try:
         bin_obj, created = Bin.objects.get_or_create(bin_id=bin_id)
+        if not created and not verify_hardware_token(bin_obj, hardware_token):
+            return Response({'error': 'Unauthorized Hardware'}, status=403)
         
         if bin_obj.status != 'idle':
             return Response({'code': bin_obj.current_qr_code, 'status': bin_obj.status})
@@ -161,6 +197,7 @@ def esp_get_code(request):
     except Exception as error:
         return Response({'error': str(error)}, status=400)
 
+@ratelimit(key='ip', rate='10/m', block=True)
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def user_scan_qr(request):
@@ -181,8 +218,13 @@ def user_scan_qr(request):
 @api_view(['POST'])
 def esp_check_scan(request):
     bin_id = request.data.get('bin_id')
+    hardware_token = request.data.get('hardware_token')
+    
     try:
         bin_obj = Bin.objects.get(bin_id=bin_id)
+        if not verify_hardware_token(bin_obj, hardware_token):
+            return Response({'error': 'Unauthorized Hardware'}, status=403)
+            
         if bin_obj.status == 'scanned':
             bin_obj.status = 'active'
             bin_obj.save()
@@ -194,21 +236,35 @@ def esp_check_scan(request):
 @api_view(['POST'])
 def esp_end_session(request):
     bin_id = request.data.get('bin_id')
+    hardware_token = request.data.get('hardware_token')
     points = int(request.data.get('points', 0))
     weight = float(request.data.get('weight', 0.0))
 
     try:
         bin_obj = Bin.objects.get(bin_id=bin_id)
+        if not verify_hardware_token(bin_obj, hardware_token):
+            return Response({'error': 'Unauthorized Hardware'}, status=403)
+            
         user = bin_obj.current_user
 
         if user:
-            profile = Profile.objects.get(user=user)
+            # التعديل هنا للحماية
+            profile, created = Profile.objects.get_or_create(user=user)
             profile.points += points
+            profile.milestone_points += points
             profile.weight += weight
             profile.deposits += 1
+            
+            saved_co2 = weight * 1.5 
+            profile.co2_saved += saved_co2
+            
+            while profile.milestone_points >= 1000:
+                profile.premium_unlocked = True
+                profile.milestone_points -= 1000
+
             profile.save()
 
-            Activity.objects.create(user=user, points=points, weight=weight)
+            Activity.objects.create(user=user, points=points, weight=weight, co2_saved_in_activity=saved_co2)
 
         bin_obj.status = 'idle'
         bin_obj.current_user = None
@@ -220,9 +276,36 @@ def esp_end_session(request):
         return Response({'error': 'bin not found'}, status=404)
 
 @api_view(['POST'])
+def esp_update_capacity(request):
+    bin_id = request.data.get('bin_id')
+    hardware_token = request.data.get('hardware_token')
+    capacity = float(request.data.get('capacity', 0.0))
+
+    try:
+        bin_obj = Bin.objects.get(bin_id=bin_id)
+        if not verify_hardware_token(bin_obj, hardware_token):
+            return Response({'error': 'Unauthorized Hardware'}, status=403)
+            
+        bin_obj.capacity = capacity
+        if capacity >= 80:
+            bin_obj.crowd_level = 'High Crowd'
+        elif capacity >= 50:
+            bin_obj.crowd_level = 'Medium Crowd'
+        else:
+            bin_obj.crowd_level = 'Low Crowd'
+        
+        bin_obj.save()
+        return Response({'message': 'Capacity updated successfully'})
+    except Bin.DoesNotExist:
+        return Response({'error': 'Bin not found'}, status=404)
+    except Exception as error:
+        return Response({'error': str(error)}, status=400)
+
+@api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def employee_update_location(request):
-    profile = Profile.objects.get(user=request.user)
+    # التعديل هنا للحماية
+    profile, created = Profile.objects.get_or_create(user=request.user)
     if not profile.is_employee or not profile.is_approved_employee:
         return Response({'error': 'unauthorized'}, status=403)
 
@@ -231,7 +314,7 @@ def employee_update_location(request):
     lng = request.data.get('lng')
 
     try:
-        bin_obj, created = Bin.objects.get_or_create(bin_id=bin_id)
+        bin_obj, created_bin = Bin.objects.get_or_create(bin_id=bin_id)
         bin_obj.lat = float(lat)
         bin_obj.lng = float(lng)
         bin_obj.save()
@@ -241,18 +324,52 @@ def employee_update_location(request):
 
 @api_view(['GET'])
 def get_all_bins(request):
+    lat_str = request.query_params.get('lat')
+    lng_str = request.query_params.get('lng')
+
     bins = Bin.objects.all()
-    serializer = BinSerializer(bins, many=True)
-    return Response(serializer.data)
+    bins_data = BinSerializer(bins, many=True).data
+
+    if lat_str and lng_str:
+        try:
+            u_lat = float(lat_str)
+            u_lng = float(lng_str)
+            for b in bins_data:
+                if b['lat'] is not None and b['lng'] is not None:
+                    dist = haversine(u_lat, u_lng, b['lat'], b['lng'])
+                    b['distance_km'] = round(dist, 2)
+                else:
+                    b['distance_km'] = None
+            
+            bins_data.sort(key=lambda x: x['distance_km'] if x['distance_km'] is not None else float('inf'))
+        except ValueError:
+            pass
+
+    return Response(bins_data)
 
 @api_view(['GET'])
 def get_activities(request):
     username = request.query_params.get('username')
+    
+    page = int(request.query_params.get('page', 1))
+    limit = int(request.query_params.get('limit', 10))
+    start = (page - 1) * limit
+    end = start + limit
+    
     try:
         user = User.objects.get(username=username)
         activities = Activity.objects.filter(user=user).order_by('-date')
-        serializer = ActivitySerializer(activities, many=True)
-        return Response(serializer.data)
+        
+        total_activities = activities.count()
+        paginated_activities = activities[start:end]
+        
+        serializer = ActivitySerializer(paginated_activities, many=True)
+        return Response({
+            'total_activities': total_activities,
+            'page': page,
+            'limit': limit,
+            'data': serializer.data
+        })
     except Exception:
         return Response({'error': 'not found'}, status=404)
 
@@ -260,34 +377,45 @@ def get_activities(request):
 def get_rewards(request):
     username = request.query_params.get('username')
     user_points = 0
+    milestone_points = 0
+    premium_unlocked = False
+    redeemed_ids = []
+
     if username:
         try:
             u = User.objects.get(username=username)
-            p = Profile.objects.get(user=u)
+            # التعديل هنا للحماية
+            p, created = Profile.objects.get_or_create(user=u)
             user_points = p.points
+            milestone_points = p.milestone_points
+            premium_unlocked = p.premium_unlocked
+            redeemed_ids = RedeemedReward.objects.filter(user=u).values_list('reward_id', flat=True)
         except Exception:
             pass
 
-    rewards = Reward.objects.all()
+    rewards = Reward.objects.exclude(id__in=redeemed_ids)
     data = []
+    
     for r in rewards:
-        r_data = RewardSerializer(r).data
-        if user_points >= r.required_points:
+        r_data = RewardSerializer(r, context={'request': request}).data
+        
+        if r.is_premium and not premium_unlocked:
+            r_data['status'] = 'locked'
+        elif user_points >= r.required_points and user_points >= r.cost:
             r_data['status'] = 'redeem'
         else:
             r_data['status'] = 'locked'
+            
         data.append(r_data)
 
-    milestone_step = 1000
-    current_level = user_points // milestone_step
-    next_milestone = (current_level + 1) * milestone_step
-    points_left = next_milestone - user_points
+    points_left = 1000 - milestone_points if milestone_points < 1000 else 0
 
     return Response({
         'rewards': data,
         'user_points': user_points,
-        'next_milestone': next_milestone,
-        'points_left': points_left
+        'next_milestone': 1000,
+        'points_left': points_left,
+        'premium_unlocked': premium_unlocked
     })
 
 @api_view(['POST'])
@@ -298,8 +426,12 @@ def redeem_reward(request):
     user = request.user
     
     try:
-        profile = Profile.objects.get(user=user)
+        # التعديل هنا للحماية
+        profile, created = Profile.objects.get_or_create(user=user)
         reward = Reward.objects.get(id=reward_id)
+
+        if reward.is_premium and not profile.premium_unlocked:
+            return Response({'error': 'premium rewards locked'}, status=400)
 
         if profile.points < reward.required_points:
             return Response({'error': 'not enough points to unlock'}, status=400)
@@ -308,7 +440,13 @@ def redeem_reward(request):
             return Response({'error': 'not enough points to redeem'}, status=400)
 
         profile.points -= reward.cost
+        
+        if reward.is_premium:
+            profile.premium_unlocked = False
+
         profile.save()
+
+        RedeemedReward.objects.create(user=user, reward=reward)
 
         response_data = {
             'message': 'redeemed successfully',
@@ -331,3 +469,16 @@ def redeem_reward(request):
         return Response({'error': 'invalid reward'}, status=404)
     except Exception as error:
         return Response({'error': str(error)}, status=400)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def update_fcm_token(request):
+    """
+    دالة لتحديث الـ FCM Token الخاص باليوزر.
+    """
+    token = request.data.get('fcm_token')
+    
+    if not token:
+        return Response({"error": "FCM token is required"}, status=status.HTTP_400_BAD_REQUEST)
+    
+    return Response({"message": "FCM token updated successfully"}, status=status.HTTP_200_OK)

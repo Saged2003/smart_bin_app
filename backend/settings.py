@@ -1,11 +1,17 @@
+# Developer: SAGED RYAN
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# تحميل المتغيرات البيئية من ملف .env
+load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = 'django-insecure-km3gxvnrts@9!kl_t))_eghs&jsg_f9gu=wfv&i5%c5^ugww-1'
+# قراءة السيكريت كي من الـ .env (مع وجود Fallback عشان لو الملف مش موجود الكود مايضربش)
+SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-km3gxvnrts@9!kl_t))_eghs&jsg_f9gu=wfv&i5%c5^ugww-1')
 
-DEBUG = True
+DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
 ALLOWED_HOSTS = ['*']
 
@@ -97,7 +103,6 @@ EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
-EMAIL_HOST_USER = 'sagedryan775@gmail.com'
-EMAIL_HOST_PASSWORD = 'SaifSaged2452003'
-
-PROJECT_CREATOR = "SAGED RYAN"
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', 'admin@smartbin.local')
+# إخفاء الباسورد
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', 'YourSecurePasswordHere')
