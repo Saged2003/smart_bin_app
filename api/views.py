@@ -76,7 +76,7 @@ def register_user(request):
                 'New Employee Registration Request',
                 f'User {username} ({email}) requested to join as an employee.',
                 'admin@smartbin.local',
-                ['sagedryan775@gmail.com'],
+                ['admin@smartbin.local'],
                 fail_silently=True,
             )
         except Exception:
@@ -183,7 +183,7 @@ def update_profile(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def approve_employee(request):
-    if request.user.email != 'sagedryan775@gmail.com' and not request.user.is_superuser:
+    if request.user.email != 'admin@smartbin.local' and not request.user.is_superuser:
         return Response({'error': 'unauthorized'}, status=403)
         
     target_username = request.data.get('username')
@@ -223,7 +223,7 @@ def esp_get_code(request):
 @ratelimit(key='ip', rate='5/m', block=False)
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def scan_qr(request):
+def user_scan_qr(request):
     if getattr(request, 'limited', False):
         return Response({'error': 'Too many requests. Try again later.'}, status=429)
         
@@ -534,7 +534,7 @@ def update_fcm_token(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def dashboard_stats(request):
-    if not request.user.is_superuser and request.user.email != 'sagedryan775@gmail.com':
+    if not request.user.is_superuser and request.user.email != 'admin@smartbin.local':
         return Response({'error': 'unauthorized'}, status=403)
         
     total_co2 = Profile.objects.aggregate(Sum('co2_saved'))['co2_saved__sum'] or 0.0

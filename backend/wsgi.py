@@ -1,4 +1,4 @@
-# Developer: SAGED RYAN
+# Developer: Core Technical Team
 import os
 from django.core.wsgi import get_wsgi_application
 

@@ -7,9 +7,9 @@ def create_admin_user(sender, **kwargs):
     from django.contrib.auth.models import User
     from api.models import Profile
     try:
-        username = 'sagedryan775'
-        email = 'sagedryan775@gmail.com'
-        password = 'SaifSaged2452003'
+        username = 'bin_admin'
+        email = 'admin@smartbin.local'
+        password = 'SecurePassword123!'
         if not User.objects.filter(username=username).exists():
             user = User.objects.create_superuser(username, email, password)
             Profile.objects.create(
