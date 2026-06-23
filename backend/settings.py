@@ -1,17 +1,14 @@
-# Developer: SAGED RYAN
 import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# تحميل المتغيرات البيئية من ملف .env
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# قراءة السيكريت كي من الـ .env (مع وجود Fallback عشان لو الملف مش موجود الكود مايضربش)
-SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-km3gxvnrts@9!kl_t))_eghs&jsg_f9gu=wfv&i5%c5^ugww-1')
+SECRET_KEY = os.environ.get('SECRET_KEY')
 
-DEBUG = os.getenv('DEBUG', 'True') == 'True'
+DEBUG = os.environ.get('DEBUG', 'False') == 'True'
 
 ALLOWED_HOSTS = ['*']
 
@@ -65,6 +62,13 @@ DATABASES = {
     }
 }
 
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'smartbin-rate-limit',
+    }
+}
+
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
@@ -103,6 +107,5 @@ EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
-EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', 'admin@smartbin.local')
-# إخفاء الباسورد
-EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', 'YourSecurePasswordHere')
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD')

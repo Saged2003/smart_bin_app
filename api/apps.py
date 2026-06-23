@@ -1,4 +1,5 @@
 import sys
+import threading
 from django.apps import AppConfig
 from django.db.models.signals import post_migrate
 
@@ -9,7 +10,6 @@ def create_admin_user(sender, **kwargs):
         username = 'sagedryan775'
         email = 'sagedryan775@gmail.com'
         password = 'SaifSaged2452003'
-        
         if not User.objects.filter(username=username).exists():
             user = User.objects.create_superuser(username, email, password)
             Profile.objects.create(
@@ -21,14 +21,18 @@ def create_admin_user(sender, **kwargs):
                 deposits=0,
                 is_employee=True,
                 is_approved_employee=True,
-                full_name="SAGED RYAN"
+                full_name="Super Admin"
             )
-        sys.stdout.write("Developer: SAGED RYAN\n")
     except Exception:
         pass
 
+def start_mqtt_client():
+    from api.mqtt import start_mqtt
+    start_mqtt()
+
 class ApiConfig(AppConfig):
     name = 'api'
-
     def ready(self):
         post_migrate.connect(create_admin_user, sender=self)
+        if 'runserver' in sys.argv:
+            threading.Thread(target=start_mqtt_client, daemon=True).start()

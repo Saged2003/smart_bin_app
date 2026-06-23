@@ -1,3 +1,4 @@
+from django.contrib import admin
 from django.urls import path
 from . import views
 
@@ -15,7 +16,9 @@ urlpatterns = [
     path('esp/check-scan/', views.esp_check_scan),
     path('esp/end-session/', views.esp_end_session),
     path('esp/update-capacity/', views.esp_update_capacity),
+    path('esp/test-fake-data/', views.esp_test_fake_data),
     path('user/scan-qr/', views.user_scan_qr),
     path('employee/update-location/', views.employee_update_location),
     path('bins/', views.get_all_bins),
+    path('dashboard/stats/', views.dashboard_stats),
 ]
